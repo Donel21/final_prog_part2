@@ -1,6 +1,6 @@
-﻿using MySql.Data.MySqlClient;
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Data.SqlClient;
 using System.IO;
 using System.Linq;
 using System.Media;
@@ -13,9 +13,9 @@ using System.Windows.Input;
 namespace final_prog_part2
 {
     //==================================================
-    // TASK CLASS FOR DATABASE
+    // USERTASK CLASS FOR DATABASE
     //==================================================
-    public class Task
+    public class UserTask
     {
         public int TaskId { get; set; }
         public string Username { get; set; }
@@ -54,8 +54,8 @@ namespace final_prog_part2
         string currentTopic = "";
         Random random = new Random();
 
-        // MySQL Connection
-        string connectionString = "Server=localhost;Database=cybersecurity_bot;Uid=root;Pwd=;";
+        // SQL Server Connection String
+        string connectionString = @"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog=cybersecurity_bot;Integrated Security=True;";
 
         // Quiz Variables
         List<Question> quizQuestions = new List<Question>();
@@ -448,14 +448,13 @@ namespace final_prog_part2
         }
 
         //==================================================
-        // TASK ASSISTANT METHODS
+        // TASK ASSISTANT METHODS (SQL SERVER VERSION)
         //==================================================
 
         private string AddNewTask(string message)
         {
             try
             {
-                // Extract task details
                 string[] phrases = { "add task", "new task", "create task", "add reminder",
                                     "remind me to", "set reminder" };
                 string taskText = message;
@@ -474,12 +473,10 @@ namespace final_prog_part2
                     return "Please specify what task you want to add. Example: 'add task - Review privacy settings'";
                 }
 
-                // Parse for date/reminder
                 DateTime? reminderDate = ParseReminderDate(taskText);
                 string title = taskText;
                 string description = "";
 
-                // Extract description if separated by dash or colon
                 if (taskText.Contains("-"))
                 {
                     string[] parts = taskText.Split(new[] { '-' }, 2);
@@ -493,7 +490,6 @@ namespace final_prog_part2
                     description = parts.Length > 1 ? parts[1].Trim() : "";
                 }
 
-                // Clean title - remove date phrases
                 string[] datePhrases = { "tomorrow", "today", "next week", "in ", "days", "day" };
                 foreach (string phrase in datePhrases)
                 {
@@ -508,13 +504,13 @@ namespace final_prog_part2
                 if (string.IsNullOrWhiteSpace(title))
                     title = taskText;
 
-                // Save to database
-                using (MySqlConnection conn = new MySqlConnection(connectionString))
+                // SQL Server version
+                using (SqlConnection conn = new SqlConnection(connectionString))
                 {
                     conn.Open();
                     string query = @"INSERT INTO tasks (username, title, description, reminder_date) 
                                    VALUES (@username, @title, @description, @reminderDate)";
-                    using (MySqlCommand cmd = new MySqlCommand(query, conn))
+                    using (SqlCommand cmd = new SqlCommand(query, conn))
                     {
                         cmd.Parameters.AddWithValue("@username", userName);
                         cmd.Parameters.AddWithValue("@title", title);
@@ -557,7 +553,6 @@ namespace final_prog_part2
             }
             else if (text.Contains("in "))
             {
-                // Parse "in X days" or "in X day"
                 var match = Regex.Match(text, @"in (\d+) days?");
                 if (match.Success)
                 {
@@ -572,30 +567,32 @@ namespace final_prog_part2
         {
             try
             {
-                List<Task> tasks = new List<Task>();
-                using (MySqlConnection conn = new MySqlConnection(connectionString))
+                List<UserTask> tasks = new List<UserTask>();
+
+                // SQL Server version
+                using (SqlConnection conn = new SqlConnection(connectionString))
                 {
                     conn.Open();
                     string query = @"SELECT * FROM tasks WHERE username = @username 
                                    ORDER BY is_completed ASC, reminder_date ASC";
-                    using (MySqlCommand cmd = new MySqlCommand(query, conn))
+                    using (SqlCommand cmd = new SqlCommand(query, conn))
                     {
                         cmd.Parameters.AddWithValue("@username", userName);
-                        using (MySqlDataReader reader = cmd.ExecuteReader())
+                        using (SqlDataReader reader = cmd.ExecuteReader())
                         {
                             while (reader.Read())
                             {
-                                tasks.Add(new Task
+                                tasks.Add(new UserTask
                                 {
-                                    TaskId = reader.GetInt32("task_id"),
-                                    Username = reader.GetString("username"),
-                                    Title = reader.GetString("title"),
+                                    TaskId = reader.GetInt32(reader.GetOrdinal("task_id")),
+                                    Username = reader.GetString(reader.GetOrdinal("username")),
+                                    Title = reader.GetString(reader.GetOrdinal("title")),
                                     Description = reader.IsDBNull(reader.GetOrdinal("description"))
-                                        ? "" : reader.GetString("description"),
+                                        ? "" : reader.GetString(reader.GetOrdinal("description")),
                                     ReminderDate = reader.IsDBNull(reader.GetOrdinal("reminder_date"))
-                                        ? (DateTime?)null : reader.GetDateTime("reminder_date"),
-                                    IsCompleted = reader.GetBoolean("is_completed"),
-                                    CreatedDate = reader.GetDateTime("created_date")
+                                        ? (DateTime?)null : reader.GetDateTime(reader.GetOrdinal("reminder_date")),
+                                    IsCompleted = reader.GetBoolean(reader.GetOrdinal("is_completed")),
+                                    CreatedDate = reader.GetDateTime(reader.GetOrdinal("created_date"))
                                 });
                             }
                         }
@@ -608,20 +605,11 @@ namespace final_prog_part2
                 }
 
                 string result = "📋 **Your Tasks:**\n";
-                int completedCount = 0;
-                int pendingCount = 0;
-
-                foreach (Task task in tasks)
-                {
-                    if (task.IsCompleted)
-                        completedCount++;
-                    else
-                        pendingCount++;
-                }
-
+                int completedCount = tasks.Count(t => t.IsCompleted);
+                int pendingCount = tasks.Count - completedCount;
                 result += $"📊 {pendingCount} pending, {completedCount} completed\n\n";
 
-                foreach (Task task in tasks)
+                foreach (UserTask task in tasks)
                 {
                     string status = task.IsCompleted ? "✅ COMPLETED" : "⏳ PENDING";
                     string reminder = task.ReminderDate.HasValue
@@ -652,27 +640,27 @@ namespace final_prog_part2
                 int taskId = int.Parse(match.Groups[1].Value);
                 string title = "";
 
-                using (MySqlConnection conn = new MySqlConnection(connectionString))
+                // SQL Server version
+                using (SqlConnection conn = new SqlConnection(connectionString))
                 {
                     conn.Open();
 
-                    // Get title first for logging
                     string selectQuery = "SELECT title FROM tasks WHERE task_id = @id AND username = @username";
-                    using (MySqlCommand selectCmd = new MySqlCommand(selectQuery, conn))
+                    using (SqlCommand selectCmd = new SqlCommand(selectQuery, conn))
                     {
                         selectCmd.Parameters.AddWithValue("@id", taskId);
                         selectCmd.Parameters.AddWithValue("@username", userName);
-                        using (MySqlDataReader reader = selectCmd.ExecuteReader())
+                        using (SqlDataReader reader = selectCmd.ExecuteReader())
                         {
                             if (reader.Read())
-                                title = reader.GetString("title");
+                                title = reader.GetString(0);
                             else
                                 return $"❌ Task ID {taskId} not found.";
                         }
                     }
 
-                    string query = "UPDATE tasks SET is_completed = TRUE WHERE task_id = @id AND username = @username";
-                    using (MySqlCommand cmd = new MySqlCommand(query, conn))
+                    string query = "UPDATE tasks SET is_completed = 1 WHERE task_id = @id AND username = @username";
+                    using (SqlCommand cmd = new SqlCommand(query, conn))
                     {
                         cmd.Parameters.AddWithValue("@id", taskId);
                         cmd.Parameters.AddWithValue("@username", userName);
@@ -700,27 +688,27 @@ namespace final_prog_part2
                 int taskId = int.Parse(match.Groups[1].Value);
                 string title = "";
 
-                using (MySqlConnection conn = new MySqlConnection(connectionString))
+                // SQL Server version
+                using (SqlConnection conn = new SqlConnection(connectionString))
                 {
                     conn.Open();
 
-                    // Get title first for logging
                     string selectQuery = "SELECT title FROM tasks WHERE task_id = @id AND username = @username";
-                    using (MySqlCommand selectCmd = new MySqlCommand(selectQuery, conn))
+                    using (SqlCommand selectCmd = new SqlCommand(selectQuery, conn))
                     {
                         selectCmd.Parameters.AddWithValue("@id", taskId);
                         selectCmd.Parameters.AddWithValue("@username", userName);
-                        using (MySqlDataReader reader = selectCmd.ExecuteReader())
+                        using (SqlDataReader reader = selectCmd.ExecuteReader())
                         {
                             if (reader.Read())
-                                title = reader.GetString("title");
+                                title = reader.GetString(0);
                             else
                                 return $"❌ Task ID {taskId} not found.";
                         }
                     }
 
                     string query = "DELETE FROM tasks WHERE task_id = @id AND username = @username";
-                    using (MySqlCommand cmd = new MySqlCommand(query, conn))
+                    using (SqlCommand cmd = new SqlCommand(query, conn))
                     {
                         cmd.Parameters.AddWithValue("@id", taskId);
                         cmd.Parameters.AddWithValue("@username", userName);
@@ -991,7 +979,7 @@ Type 'start quiz' to try again!";
         {
             try
             {
-                using (MySqlConnection conn = new MySqlConnection(connectionString))
+                using (SqlConnection conn = new SqlConnection(connectionString))
                 {
                     conn.Open();
                     LogAction("Database connection successful");
